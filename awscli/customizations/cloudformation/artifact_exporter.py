@@ -58,14 +58,16 @@ def is_local_folder(path):
 def is_local_file(path):
     return is_path_value_valid(path) and os.path.isfile(path)
 
+
 def is_local_file_comma_delimited_list(path):
-    if type(path) != str:
+    if not isinstance(path, six.string_types):
         return False
     paths = path.split(',')
     for p in paths:
         if (not is_path_value_valid(p)) or (not (os.path.isfile(p))):
             return False
     return True
+
 
 def is_zip_file(path):
     return (
@@ -143,7 +145,6 @@ def upload_local_artifacts(resource_id, resource_dict, property_name,
     """
 
     local_path = jmespath.search(property_name, resource_dict)
-
     if local_path is None:
         # Build the root directory and upload to S3
         local_path = parent_dir
@@ -529,7 +530,6 @@ class GlueJobDefaultArgumentsExtraPyFilesResource(Resource):
     RESOURCE_TYPE = "AWS::Glue::Job"
     PROPERTY_NAME = "DefaultArguments.\"--extra-py-files\""
     PACKAGE_NULL_PROPERTY = False
-
 
     def do_export(self, resource_id, resource_dict, parent_dir):
         uploaded_url = upload_local_artifacts(resource_id, resource_dict,
