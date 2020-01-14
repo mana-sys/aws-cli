@@ -533,8 +533,30 @@ class GlueJobDefaultArgumentsExtraPyFilesResource(Resource):
 
     def do_export(self, resource_id, resource_dict, parent_dir):
         uploaded_url = upload_local_artifacts(resource_id, resource_dict,
-                                   self.PROPERTY_NAME,
-                                   parent_dir, self.uploader, append_filename=True)
+                                              self.PROPERTY_NAME,
+                                              parent_dir,
+                                              self.uploader,
+                                              append_filename=True)
+
+        # Need to remove quotes from the path for it to be output correctly.
+        set_value_from_jmespath(resource_dict, self.PROPERTY_NAME.replace('"', ''), uploaded_url)
+
+
+class GlueJobDefaultArgumentsExtraFilesResource(Resource):
+    """
+    Represents a Glue::Job resource that can refer to extra Python files
+    via the DefaultArguments.--extra-files property.
+    """
+    RESOURCE_TYPE = "AWS::Glue::Job"
+    PROPERTY_NAME = "DefaultArguments.\"--extra-files\""
+    PACKAGE_NULL_PROPERTY = False
+
+    def do_export(self, resource_id, resource_dict, parent_dir):
+        uploaded_url = upload_local_artifacts(resource_id, resource_dict,
+                                              self.PROPERTY_NAME,
+                                              parent_dir,
+                                              self.uploader,
+                                              append_filename=True)
 
         # Need to remove quotes from the path for it to be output correctly.
         set_value_from_jmespath(resource_dict, self.PROPERTY_NAME.replace('"', ''), uploaded_url)
@@ -556,7 +578,8 @@ RESOURCES_EXPORT_LIST = [
     ServerlessLayerVersionResource,
     LambdaLayerVersionResource,
     GlueJobCommandScriptLocationResource,
-    GlueJobDefaultArgumentsExtraPyFilesResource
+    GlueJobDefaultArgumentsExtraFilesResource,
+    GlueJobDefaultArgumentsExtraPyFilesResource,
 ]
 
 METADATA_EXPORT_LIST = [
