@@ -59,6 +59,16 @@ def is_local_file(path):
     return is_path_value_valid(path) and os.path.isfile(path)
 
 
+def is_local_file_comma_delimited_list(path):
+    if not isinstance(path, six.string_types):
+        return False
+    paths = path.split(',')
+    for p in paths:
+        if (not is_path_value_valid(p)) or (not (os.path.isfile(p))):
+            return False
+    return True
+
+
 def is_zip_file(path):
     return (
         is_path_value_valid(path) and
@@ -98,7 +108,7 @@ def parse_s3_url(url,
 
 
 def upload_local_artifacts(resource_id, resource_dict, property_name,
-                           parent_dir, uploader):
+                           parent_dir, uploader, append_filename=False):
     """
     Upload local artifacts referenced by the property at given resource and
     return S3 URL of the uploaded object. It is the responsibility of callers
@@ -111,6 +121,14 @@ def upload_local_artifacts(resource_id, resource_dict, property_name,
 
     If path is already a path to S3 object, this method does nothing.
 
+    An additional parameter called append_filename has been added. This property
+    will append the end of the filename as part of the uploaded S3 path after the
+    md5hash. For example, if the absolute path referenced in the CloudFormation template
+    is /path/to/file/bar.txt, the uploaded file will be of the format {md5hash}/bar.txt.
+    This functionality is needed for uploading extra Python files to be used by Glue jobs.
+    This option affects only uploading single files or uploading a comma-delimited list of
+    files.
+
     :param resource_id:     Id of the CloudFormation resource
     :param resource_dict:   Dictionary containing resource definition
     :param property_name:   Property name of CloudFormation resource where this
@@ -118,13 +136,15 @@ def upload_local_artifacts(resource_id, resource_dict, property_name,
     :param parent_dir:      Resolve all relative paths with respect to this
                             directory
     :param uploader:        Method to upload files to S3
+    :param append_filename: Controls whether the original short filename will be appended.
 
-    :return:                S3 URL of the uploaded object
-    :raise:                 ValueError if path is not a S3 URL or a local path
+    :return:                S3 URL of the uploaded object, or a comma-delimited list of S3 URLs of
+                            the uploaded objects.
+    :raise:                 ValueError if path is not a S3 URL or a local path, or a comma-delimited-list
+                            of local paths.
     """
 
     local_path = jmespath.search(property_name, resource_dict)
-
     if local_path is None:
         # Build the root directory and upload to S3
         local_path = parent_dir
@@ -138,7 +158,10 @@ def upload_local_artifacts(resource_id, resource_dict, property_name,
                   .format(property_name, resource_id))
         return local_path
 
-    local_path = make_abs_path(parent_dir, local_path)
+    if ',' in local_path:
+        local_path = ','.join([make_abs_path(parent_dir, lp) for lp in local_path.split(',')])
+    else:
+        local_path = make_abs_path(parent_dir, local_path)
 
     # Or, pointing to a folder. Zip the folder and upload
     if is_local_folder(local_path):
@@ -146,7 +169,19 @@ def upload_local_artifacts(resource_id, resource_dict, property_name,
 
     # Path could be pointing to a file. Upload the file
     elif is_local_file(local_path):
+
+        # If append_filename is specified, use the new
+        # uploader method for this case.
+        if append_filename:
+            return uploader.upload_with_dedup_with_original_name_appended(local_path)
+
         return uploader.upload_with_dedup(local_path)
+
+    # Path could be comma delimited list, i.e. Glue Job --extra-py-files argument.
+    # In this case, upload each file in the comma-delimited list, and return a new
+    # comma-delimited list consisting of the S3 URLs of the uploaded objects.
+    elif is_local_file_comma_delimited_list(local_path):
+        return ','.join([uploader.upload_with_dedup_with_original_name_appended(path) for path in local_path.split(',')])
 
     raise exceptions.InvalidLocalPathError(
             resource_id=resource_id,
@@ -487,6 +522,46 @@ class GlueJobCommandScriptLocationResource(Resource):
     PROPERTY_NAME = "Command.ScriptLocation"
 
 
+class GlueJobDefaultArgumentsExtraPyFilesResource(Resource):
+    """
+    Represents a Glue::Job resource that can refer to extra Python files
+    via the DefaultArguments.--extra-py-files property.
+    """
+    RESOURCE_TYPE = "AWS::Glue::Job"
+    PROPERTY_NAME = "DefaultArguments.\"--extra-py-files\""
+    PACKAGE_NULL_PROPERTY = False
+
+    def do_export(self, resource_id, resource_dict, parent_dir):
+        uploaded_url = upload_local_artifacts(resource_id, resource_dict,
+                                              self.PROPERTY_NAME,
+                                              parent_dir,
+                                              self.uploader,
+                                              append_filename=True)
+
+        # Need to remove quotes from the path for it to be output correctly.
+        set_value_from_jmespath(resource_dict, self.PROPERTY_NAME.replace('"', ''), uploaded_url)
+
+
+class GlueJobDefaultArgumentsExtraFilesResource(Resource):
+    """
+    Represents a Glue::Job resource that can refer to extra Python files
+    via the DefaultArguments.--extra-files property.
+    """
+    RESOURCE_TYPE = "AWS::Glue::Job"
+    PROPERTY_NAME = "DefaultArguments.\"--extra-files\""
+    PACKAGE_NULL_PROPERTY = False
+
+    def do_export(self, resource_id, resource_dict, parent_dir):
+        uploaded_url = upload_local_artifacts(resource_id, resource_dict,
+                                              self.PROPERTY_NAME,
+                                              parent_dir,
+                                              self.uploader,
+                                              append_filename=True)
+
+        # Need to remove quotes from the path for it to be output correctly.
+        set_value_from_jmespath(resource_dict, self.PROPERTY_NAME.replace('"', ''), uploaded_url)
+
+
 RESOURCES_EXPORT_LIST = [
     ServerlessFunctionResource,
     ServerlessApiResource,
@@ -503,6 +578,8 @@ RESOURCES_EXPORT_LIST = [
     ServerlessLayerVersionResource,
     LambdaLayerVersionResource,
     GlueJobCommandScriptLocationResource,
+    GlueJobDefaultArgumentsExtraFilesResource,
+    GlueJobDefaultArgumentsExtraPyFilesResource,
 ]
 
 METADATA_EXPORT_LIST = [
